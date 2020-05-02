@@ -44,11 +44,12 @@ def preprocess_normals():
     """
     # TODO check in with Brian on where this file is from.
 
-    def month_day_to_doy(row):
-        return datetime.date(2020, row["Month"], row["Day"]).strftime("%j")
+    def month_day_to_date(row):
+        # This needs to be a leap year to ensure full range of days.
+        return datetime.date(2020, row["Month"], row["Day"]).strftime("%Y-%m-%d")
 
     normals = pd.read_csv("StationsNormals.txt")
-    normals = normals.assign(doy=normals.apply(month_day_to_doy, axis=1).astype("int"))
+    normals = normals.assign(date=normals.apply(month_day_to_date, axis=1))
     normals = normals.drop(
         columns=[
             "Month",
@@ -69,8 +70,9 @@ def build_daily_data():
     Download ACIS data, perform some basic cleaning.
     """
 
-    stations = pd.read_csv("StationsList.txt")
+    stations = pd.read_csv("StationsList.txt", index_col=0)
     normals = pd.read_csv("./normals.csv", index_col=0)
+    normals["date"] = pd.to_datetime(normals["date"])
     all_stations = pd.DataFrame()
 
     start_date = datetime.date(2019, 6, 1).strftime("%Y-%m-%d")
@@ -78,11 +80,12 @@ def build_daily_data():
         "%Y-%m-%d"
     )
 
-    for row in stations.iterrows():
-        logging.info("Processing %s", row["placename"])
-        station_data_url = "http://data.rcc-acis.org/StnData?sid={}sdate={}&edate={}&elems=1,2&output=csv".format(
-            row["usw"], start_date, end_date
+    for index, row in stations.iterrows():
+        logging.info("Processing %s (%s)", row["placename"], index)
+        station_data_url = "http://data.rcc-acis.org/StnData?sid={}&sdate={}&edate={}&elems=1,2&output=csv".format(
+            index, start_date, end_date
         )
+        logging.debug("Fetching API endpoint: %s", station_data_url)
 
         # std = station data
         std = pd.read_csv(
@@ -96,24 +99,23 @@ def build_daily_data():
 
         std["date"] = pd.to_datetime(std["date"])
         std["maxt"] = std["maxt"].astype("float")
-        std["maxt"] = std["mint"].astype("float")
-        # std.set_index("date", inplace=True) # use date index
-        std = std.assign(doy=std["date"].dt.strftime("%j").astype("int"))
-        std = std.assign(usw=row["usw"])  # add station
+        std["mint"] = std["mint"].astype("float")
+        # std = std.assign(doy=std["date"].dt.strftime("%j").astype("int"))
+        std = std.assign(usw=index)  # add station
         std = std.assign(current_average=std[["maxt", "mint"]].mean(axis=1))  # average
-        # TODO not sure if this is used as part of this data
-        # processing sequence.
-        # std = std.assign(weighted=std["current_average"] * row["weight"]) # weighted average
 
-        # Join station data to subset of normals on key `doy`
-        nd = normals.loc[normals["StationName"] == row["usw"]]
-        jd = std.set_index("doy").join(nd.set_index("doy"))
+        # Subset for current location
+        nd = normals.loc[normals["StationName"] == index]
+
+        # Make an all-2020 date column to join with normals data properly
+        std = std.assign(key_date=std["date"].apply(lambda dt: dt.replace(year=2020)))
+        jd = std.set_index("key_date").join(nd.set_index("date"))
 
         # Departure standard deviation (SD) =
         # (current average - normal average) / normal SD
         jd = jd.assign(
             depart_sd=((jd["current_average"] - jd["AveTemp"]) / jd["AveTempSD"]).round(
-                2
+                3
             )
         )
         jd = jd.drop(columns=["StationName"])
@@ -127,7 +129,7 @@ def build_daily_index(sd):
     (not working yet!)
     TODO fixme
     """
-
+    # Remove any missing rows.
     sd = sd.dropna()
     stations = pd.read_csv("StationsList.txt")
 
@@ -138,16 +140,28 @@ def build_daily_index(sd):
 
         # Add weights.
         joined = group.set_index("usw").join(stations.set_index("usw"))
+        weighted_departure_sd_daily_mean = (
+            joined["depart_sd"] * joined["weight"]
+        ).mean()
+        count = joined.shape[0]
+
+        ww = scipy.stats.norm(0, 0.71074).cdf(weighted_departure_sd_daily_mean)
+        if ww < 0.5:
+            prob = round(0 - (20 * (0.5 - ww)), 3)
+        if ww >= 0.5:
+            prob = round(20 * (ww - 0.5), 3)
 
         # Compute daily index.
         daily_index = daily_index.append(
             {
                 "date": day,
-                "daily_index": (joined["depart_sd"] * joined["weight"]).mean(),
+                "count": count,
+                "daily_index": prob,
             },
             ignore_index=True,
         )
-    daily_index.to_csv("out.csv")
+    daily_index["count"] = daily_index["count"].astype("int")
+    daily_index.to_csv("./data/test-daily-index.csv")
     print(daily_index)  # all wrong 🤣
 
 
