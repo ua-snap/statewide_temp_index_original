@@ -1,3 +1,4 @@
+usw,placename,stid,weight
 USW00026451,Anchorage Intl Ap,PANC,0.808
 USW00027502,Barrow Post Rogers Ap,PABR,2.355
 USW00026615,Bethel Ap,PABE,1.999

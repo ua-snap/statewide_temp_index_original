@@ -11,8 +11,10 @@ import os
 import sys
 import datetime
 import ssl
+import logging
 from urllib.request import urlopen
 import numpy as np
+import pandas as pd
 import scipy.stats
 
 # TODO rename this
@@ -29,243 +31,135 @@ else:
     ssl._create_default_https_context = _create_unverified_https_context
 
 
-# Create a list of the dates used for analysis. The end date should extend into the future.
-# TODO make this usually extend 1 year back?
-stdate = datetime.date(2019, 6, 1)
-enddate = datetime.date.today() + datetime.timedelta(days=-1)
-
-numdays = (enddate - stdate).days + 1
-
-# TODO figure out why this is different from enddate
-today = datetime.date.today() + datetime.timedelta(days=-1)
-
-# TODO bake these into the above
-s1 = stdate.strftime("%Y-%m-%d")
-s2 = enddate.strftime("%Y-%m-%d")
-s3 = today.strftime("%Y-%m-%d")
-
-# TODO what is this code doing?
-# I think it's making an array of dates.
-# This could be done better in Pandas.
-List_of_Dates = np.empty(numdays, dtype=np.dtype("U10"))
-List_of_Dates[0] = stdate.strftime("%Y-%m-%d")
-for aa in range(0, numdays - 1):
-    tempdate = stdate + datetime.timedelta(days=aa + 1)
-    List_of_Dates[aa + 1] = tempdate.strftime("%Y-%m-%d")
+# Set up logging
+DASH_LOG_LEVEL = os.getenv("DASH_LOG_LEVEL", default="info")
+logging.basicConfig(level=getattr(logging, DASH_LOG_LEVEL.upper(), logging.INFO))
 
 
-##
-# This next section downloads all the ACIS data and writes one line for each
-# day's record for each station.
+def preprocess_normals():
+    """
+    Read the StationNormals.txt file provided with the repo,
+    and do some pre-processing that doesn't need to be done
+    during each data run.
+    """
+    # TODO check in with Brian on where this file is from.
+
+    def month_day_to_doy(row):
+        return datetime.date(2020, row["Month"], row["Day"]).strftime("%j")
+
+    normals = pd.read_csv("StationsNormals.txt")
+    normals = normals.assign(doy=normals.apply(month_day_to_doy, axis=1).astype("int"))
+    normals = normals.drop(
+        columns=[
+            "Month",
+            "Day",
+            "StationID",
+            "ICAO",
+            "MaxTemp",
+            "MinTemp",
+            "MaxTempSD",
+            "MinTempSD",
+        ]
+    )
+    normals.to_csv("normals.csv")
 
 
-# Get the list of stations and their USW codes
-Station_USW = np.empty(25, dtype=np.dtype("U11"))
-Station_Name = np.empty(25, dtype=np.dtype("U99"))
-Station_ICAO = np.empty(25, dtype=np.dtype("U4"))
-Station_Weight = np.empty(25, dtype=float)
+def build_daily_data():
+    """
+    Download ACIS data, perform some basic cleaning.
+    """
 
-datastring = "Date,USW,Name,Label1,Average,Label2,Normal,Label3,Depart SD,Weight\n"
+    stations = pd.read_csv("StationsList.txt")
+    normals = pd.read_csv("./normals.csv", index_col=0)
+    all_stations = pd.DataFrame()
 
-lastdatestring = "USW,Name,SD\n"
+    start_date = datetime.date(2019, 6, 1).strftime("%Y-%m-%d")
+    end_date = (datetime.date.today() + datetime.timedelta(days=-1)).strftime(
+        "%Y-%m-%d"
+    )
 
-
-# TODO It looks like this is kind of building
-# a table-like structure as well as grabbing
-# API data then doing adjustments.  Let's split this up, because it
-# looks like `pandas.read_csv()` will do most
-# of the work on that front.
-# Fundamentally, it looks like this code is creating
-# a new data table of station info.
-with open("./StationsList.txt") as csv_station_name_file:
-    csv_reader1 = csv.reader(csv_station_name_file, delimiter=",")
-    station_count = 0  # this is incremented when a new station is encountered
-    for row1 in csv_reader1:
-        Station_USW[station_count] = row1[0]
-        Station_Name[station_count] = row1[1]
-        Station_ICAO[station_count] = row1[2]
-        Station_Weight[station_count] = row1[3]
-        # print(Station_USW[station_count]+"   "+Station_Name[station_count])
-        station_URL = (
-            "http://data.rcc-acis.org/StnData?sid="
-            + row1[0]
-            + "&sdate="
-            + s1
-            + "&edate="
-            + s2
-            + "&elems=1,2&output=csv"
+    for row in stations.iterrows():
+        logging.info("Processing %s", row["placename"])
+        station_data_url = "http://data.rcc-acis.org/StnData?sid={}sdate={}&edate={}&elems=1,2&output=csv".format(
+            row["usw"], start_date, end_date
         )
-        response = urlopen(station_URL)
-        html = response.read().decode("utf8")
-        html_list = html.splitlines()
-        del html_list[0]
-        for x in html_list:
-            if len(x) > 10:
-                today_year = int(x[0:4])
-                today_month = int(x[5:7])
-                today_day = int(x[8:10])
-                xx = x.split(",")
-                # TODO This is omitting some data
-                # from the ACIS results, if both
-                # values are missing.
-                # print(xx)
-                if (
-                    xx[1] != "M" and xx[2] != "M"
-                ):  # look for entries where a valid max and min exist
-                    today_max = xx[1]
-                    today_min = xx[2]
-                    today_ave = (int(today_max) + int(today_min)) / float(2.0)
-                    if (
-                        row1[2] == "PAOT" and today_year == 2019
-                    ):  # adjustment for Kotzebue
-                        if today_month == 5 and today_day >= 6:
-                            today_ave = today_ave - 4
-                        if today_month == 9 and today_day <= 9:
-                            today_ave = today_ave - 4
-                        if today_month >= 6 and today_month <= 8:
-                            today_ave = today_ave - 4
-                    if (
-                        row1[2] == "PANC" and today_year >= 2017 and today_year <= 2018
-                    ):  # adjustment for Anchorage
-                        today_ave = today_ave - 2.0
-                    if (
-                        row1[2] == "PANC" and today_year == 2016 and today_month == 12
-                    ):  # adjustment for Anchorage
-                        today_ave = today_ave - 2.0
-                    if (
-                        row1[2] == "PANC" and today_year == 2020 and today_month == 1
-                    ):  # adjustment for Anchorage
-                        today_ave = today_ave - 2.0
-                    today_ave_weighted = float(today_ave) * float(row1[3])
-                    # print(row1[1] + "," + x[0:10] + "," + today_max + "," + today_min)
-                    with open("./StationsNormals.txt") as csv_normal_file:
-                        csv_reader2 = csv.reader(csv_normal_file, delimiter=",")
-                        for row2 in csv_reader2:
-                            if (
-                                row2[0] == row1[0]
-                                and int(row2[2]) == int(today_month)
-                                and int(row2[3]) == int(today_day)
-                            ):
-                                norm_ave = float(row2[6])
-                                norm_sd = float(row2[9])
-                                depart = float(today_ave) - float(norm_ave)
-                                depart_sd = (
-                                    float(today_ave) - float(norm_ave)
-                                ) / float(norm_sd)
-                                depart_sd_weighted = (
-                                    (float(today_ave) - float(norm_ave))
-                                    / float(norm_sd)
-                                    * float(row1[3])
-                                )
-                    datastring = (
-                        datastring
-                        + x[0:10]
-                        + ","
-                        + row1[0]
-                        + ","
-                        + row1[1]
-                        + ",Ave,"
-                        + str(today_ave)
-                        + ",Norm,"
-                        + str(norm_ave)
-                        + ",Depart SD,"
-                        + str(round(depart_sd, 3))
-                        + ",Weight,"
-                        + str(row1[3])
-                        + "\n"
-                    )
-                    # TODO is lastdate used at all?
-                    if x[0:10] == s3:  # look for the last date
-                        lastdatestring = (
-                            lastdatestring
-                            + row1[0]
-                            + ","
-                            + row1[1]
-                            + ","
-                            + str(round(depart_sd, 3))
-                            + "\n"
-                        )
-        station_count += (
-            1
-        )  # increment the station count (e.g., Anchorage is first, Barrow is second, etc.)
 
-# print("\n\n\n\n\n" + datastring)
+        # std = station data
+        std = pd.read_csv(
+            station_data_url,
+            names=["date", "maxt", "mint"],
+            parse_dates=True,
+            skiprows=1,
+        )
 
-exists = os.path.exists(localPath + "DailyData.txt")
-if exists == True:
-    os.remove(localPath + "DailyData.txt")
-with open(localPath + "DailyData.txt", "w") as f:
-    f.write(datastring)
+        std = std.loc[(std["maxt"] != "M") & (std["mint"] != "M")]  # drop missing
 
-# TODO is lastdate used anywhere?
-exists = os.path.exists(localPath + "LastDayOnly.txt")
-if exists == True:
-    os.remove(localPath + "LastDayOnly.txt")
-with open(localPath + "LastDayOnly.txt", "w") as f:
-    f.write(lastdatestring)
+        std["date"] = pd.to_datetime(std["date"])
+        std["maxt"] = std["maxt"].astype("float")
+        std["maxt"] = std["mint"].astype("float")
+        # std.set_index("date", inplace=True) # use date index
+        std = std.assign(doy=std["date"].dt.strftime("%j").astype("int"))
+        std = std.assign(usw=row["usw"])  # add station
+        std = std.assign(current_average=std[["maxt", "mint"]].mean(axis=1))  # average
+        # TODO not sure if this is used as part of this data
+        # processing sequence.
+        # std = std.assign(weighted=std["current_average"] * row["weight"]) # weighted average
+
+        # Join station data to subset of normals on key `doy`
+        nd = normals.loc[normals["StationName"] == row["usw"]]
+        jd = std.set_index("doy").join(nd.set_index("doy"))
+
+        # Departure standard deviation (SD) =
+        # (current average - normal average) / normal SD
+        jd = jd.assign(
+            depart_sd=((jd["current_average"] - jd["AveTemp"]) / jd["AveTempSD"]).round(
+                2
+            )
+        )
+        jd = jd.drop(columns=["StationName"])
+        all_stations = all_stations.append(jd)
+
+    all_stations.to_csv("./data/test-daily-averages.csv")
 
 
+def build_daily_index(sd):
+    """
+    (not working yet!)
+    TODO fixme
+    """
+
+    sd = sd.dropna()
+    stations = pd.read_csv("StationsList.txt")
+
+    daily_index = pd.DataFrame(columns=["date", "daily_index"])
+
+    grouped = sd.groupby(["date"])
+    for day, group in grouped:
+
+        # Add weights.
+        joined = group.set_index("usw").join(stations.set_index("usw"))
+
+        # Compute daily index.
+        daily_index = daily_index.append(
+            {
+                "date": day,
+                "daily_index": (joined["depart_sd"] * joined["weight"]).mean(),
+            },
+            ignore_index=True,
+        )
+    daily_index.to_csv("out.csv")
+    print(daily_index)  # all wrong 🤣
+
+
+# preprocess_normals()  # if needed to reprocess the station normals
+# build_daily_data()  # if needed to refresh data from API
+test_data = pd.read_csv("./data/test-daily-averages.csv")
+build_daily_index(test_data)
 sys.exit()
 
-##
-# Loop though List_of_Dates array and then open the DailyData.txt file and find matching dates
 
+############### work in progress ends here.
 
-AveDailySD = np.empty(numdays, dtype=float)
-
-summaryString = "Date,Ave SD,Num Stations,Daily Index,Daily Temp\n"
-
-for bb in range(0, numdays):
-    dateStr = List_of_Dates[bb]
-    dailyAvg = float(0.0)
-    dailySum = float(0.0)
-    dailyTemp = float(0.0)
-    dailyAvgTemp = float(0.0)
-    dailyCount = 0
-    with open(localPath + "DailyData.txt") as csv_daily_file:
-        csv_reader3 = csv.reader(csv_daily_file, delimiter=",")
-        for row3 in csv_reader3:
-            if row3[0] == dateStr:
-                dailyCount += 1
-                dailySum += float(row3[8]) * float(row3[10])
-                dailyTemp += (float(row3[4])) * float(row3[10])
-                dailyAvg = dailySum / float(dailyCount)
-                dailyAvgTemp = dailyTemp / float(dailyCount)
-    if dailyCount > 0:
-        ww = scipy.stats.norm(0, 0.71074).cdf(dailyAvg)
-        if ww < 0.5:
-            prob = round(0 - (20 * (0.5 - ww)), 3)
-        if ww >= 0.5:
-            prob = round(20 * (ww - 0.5), 3)
-        print(
-            dateStr
-            + ","
-            + str(round(dailyAvg, 3))
-            + ","
-            + str(dailyCount)
-            + ","
-            + str(prob)
-        )
-        summaryString = (
-            summaryString
-            + dateStr
-            + ","
-            + str(round(dailyAvg, 3))
-            + ","
-            + str(dailyCount)
-            + ","
-            + str(prob)
-            + ","
-            + str(round(dailyAvgTemp, 3))
-            + "\n"
-        )
-
-exists = os.path.exists(localPath + "DailySummary.txt")
-if exists == True:
-    os.remove(localPath + "DailySummary.txt")
-
-with open(localPath + "DailySummary.txt", "w") as f:
-    f.write(summaryString)
 
 ##
 
