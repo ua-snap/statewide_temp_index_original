@@ -69,7 +69,6 @@ datastring = "Date,USW,Name,Label1,Average,Label2,Normal,Label3,Depart SD,Weight
 
 lastdatestring = "USW,Name,SD\n"
 
-
 # TODO It looks like this is kind of building
 # a table-like structure as well as grabbing
 # API data then doing adjustments.  Let's split this up, because it
@@ -197,15 +196,16 @@ if exists == True:
 with open(localPath + "DailyData.txt", "w") as f:
     f.write(datastring)
 
+
+
 # TODO is lastdate used anywhere?
-exists = os.path.exists(localPath + "LastDayOnly.txt")
-if exists == True:
-    os.remove(localPath + "LastDayOnly.txt")
-with open(localPath + "LastDayOnly.txt", "w") as f:
-    f.write(lastdatestring)
+# It isn't.
+# exists = os.path.exists(localPath + "LastDayOnly.txt")
+# if exists == True:
+#     os.remove(localPath + "LastDayOnly.txt")
+# with open(localPath + "LastDayOnly.txt", "w") as f:
+#     f.write(lastdatestring)
 
-
-sys.exit()
 
 ##
 # Loop though List_of_Dates array and then open the DailyData.txt file and find matching dates
@@ -266,6 +266,9 @@ if exists == True:
 
 with open(localPath + "DailySummary.txt", "w") as f:
     f.write(summaryString)
+
+
+sys.exit()
 
 ##
 
