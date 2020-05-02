@@ -165,10 +165,23 @@ def build_daily_index(sd):
     print(daily_index)  # all wrong 🤣
 
 
+def test_daily_index():
+    """
+    Make a diff of the files.
+    """
+    old = pd.read_csv("./data/Reference-DailySummary-May2.csv")
+    new = pd.read_csv("./data/test-daily-index.csv", index_col=0)
+    joined = old.set_index("Date").join(new.set_index("date"))
+    joined = joined.assign(index_delta=abs(joined["Daily Index"] - joined["daily_index"]))
+    joined = joined.assign(count_delta=abs(joined["Num Stations"] - joined["count"]))
+    print(joined)
+    joined.to_csv("./data/test-compare-deltas.csv")
+
 # preprocess_normals()  # if needed to reprocess the station normals
 # build_daily_data()  # if needed to refresh data from API
-test_data = pd.read_csv("./data/test-daily-averages.csv")
-build_daily_index(test_data)
+# test_data = pd.read_csv("./data/test-daily-averages.csv")
+# build_daily_index(test_data)
+test_daily_index()
 sys.exit()
 
 
