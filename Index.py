@@ -75,7 +75,7 @@ def build_daily_data():
     normals["date"] = pd.to_datetime(normals["date"])
     all_stations = pd.DataFrame()
 
-    start_date = datetime.date(2019, 6, 1).strftime("%Y-%m-%d")
+    start_date = (datetime.date.today() + datetime.timedelta(days=-366)).strftime("%Y-%m-%d")
     end_date = (datetime.date.today() + datetime.timedelta(days=-1)).strftime(
         "%Y-%m-%d"
     )
@@ -162,12 +162,11 @@ def build_daily_index(sd):
         )
     daily_index["count"] = daily_index["count"].astype("int")
     daily_index.to_csv("./data/test-daily-index.csv")
-    print(daily_index)  # all wrong 🤣
 
 
 def test_daily_index():
     """
-    Make a diff of the files.
+    Make a diff of the old/new processing of the data.
     """
     old = pd.read_csv("./data/Reference-DailySummary-May2.csv")
     new = pd.read_csv("./data/test-daily-index.csv", index_col=0)
@@ -178,9 +177,9 @@ def test_daily_index():
     joined.to_csv("./data/test-compare-deltas.csv")
 
 # preprocess_normals()  # if needed to reprocess the station normals
-# build_daily_data()  # if needed to refresh data from API
-# test_data = pd.read_csv("./data/test-daily-averages.csv")
-# build_daily_index(test_data)
+build_daily_data()  # if needed to refresh data from API
+test_data = pd.read_csv("./data/test-daily-averages.csv")
+build_daily_index(test_data)
 test_daily_index()
 sys.exit()
 
